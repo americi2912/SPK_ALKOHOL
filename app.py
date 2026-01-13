@@ -108,7 +108,12 @@ def score_ketersediaan(row) -> int:
 
 def build_spk_matrix(df: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame()
-    out["Alternatif"] = df["product_name"].astype(str)
+    out["Alternatif"] = (
+    df["product_name"]
+    .astype(str)
+    .str.replace(r"\s+", " ", regex=True)  # rapikan spasi ganda
+    .str.strip()                           # buang spasi depan/belakang
+    )
 
     out["Harga"] = pd.to_numeric(df["price_idr"], errors="coerce")
     out["Brand"] = df.apply(score_brand, axis=1)
@@ -177,13 +182,37 @@ st.markdown(
 """
 )
 
-data_df = spk_df[spk_df["Alternatif"].isin(FIXED_ALTERNATIVES)].reset_index(drop=True)
+# normalisasi untuk pencocokan (lower + strip + rapikan spasi)
+spk_df["_alt_norm"] = (
+    spk_df["Alternatif"]
+    .astype(str)
+    .str.replace(r"\s+", " ", regex=True)
+    .str.strip()
+    .str.lower()
+)
 
-# validasi keamanan
+fixed_norm = [a.strip().lower() for a in FIXED_ALTERNATIVES]
+
+data_df = spk_df[spk_df["_alt_norm"].isin(fixed_norm)].copy()
+
+# pastikan urutannya sesuai FIXED_ALTERNATIVES
+order_map = {name.strip().lower(): i for i, name in enumerate(FIXED_ALTERNATIVES)}
+data_df["_order"] = data_df["_alt_norm"].map(order_map)
+data_df = data_df.sort_values("_order").drop(columns=["_alt_norm", "_order"]).reset_index(drop=True)
+
 if len(data_df) != len(FIXED_ALTERNATIVES):
-    missing = set(FIXED_ALTERNATIVES) - set(data_df["Alternatif"])
-    st.error(f"Alternatif berikut tidak ditemukan di dataset: {list(missing)}")
+    found_norm = set(
+        spk_df["Alternatif"]
+        .astype(str)
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+        .str.lower()
+        .tolist()
+    )
+    missing = [a for a in FIXED_ALTERNATIVES if a.strip().lower() not in found_norm]
+    st.error(f"Alternatif berikut tidak ditemukan di dataset: {missing}")
     st.stop()
+
 
 st.subheader("Data yang Digunakan untuk TOPSIS")
 st.dataframe(data_df, use_container_width=True)
