@@ -1,83 +1,167 @@
-import streamlit as st
-import pandas as pd
 import numpy as np
+import pandas as pd
+import streamlit as st
+from pathlib import Path
 
-# Konfigurasi Halaman
-st.set_page_config(page_title="SPK Rekomendasi Alkohol", layout="wide")
+from topsis import topsis_rank, normalize_weights
 
-st.title("🍷 Sistem Pendukung Keputusan Pemilihan Alkohol")
-st.markdown("Pilih preferensi Anda di samping kiri untuk mendapatkan rekomendasi terbaik menggunakan metode **TOPSIS**.")
+st.set_page_config(page_title="SPK Alkohol - TOPSIS", layout="wide")
+st.title("Sistem Pendukung Keputusan Alkohol (TOPSIS)")
+st.caption("Rekomendasi dihitung otomatis dari dataset bawaan (Dataset Alkohol.xlsx).")
 
-# --- 1. DATASET STATIS (Berdasarkan dokumen Anda) ---
-# Matriks Keputusan (X) 
-data = {
-    'Kode': ['A1', 'A2', 'A3', 'A4', 'A5'],
-    'Nama Produk': ['Wine Merah', 'Vodka', 'Baileys', 'Tequila', 'Aperol'],
-    'C1 (Harga)': [4, 1, 3, 2, 5],
-    'C2 (Brand)': [4, 5, 2, 4, 1],
-    'C3 (Komposisi)': [2, 1, 5, 1, 1],
-    'C4 (Estetika)': [3, 1, 1, 4, 5],
-    'C5 (Ketersediaan)': [3, 4, 1, 5, 3]
-}
-df_dataset = pd.DataFrame(data)
+# ================== CONFIG DATASET ==================
+DATASET_FILENAME = "Dataset Alkohol.xlsx"  # nama file dataset di folder project
 
-# --- 2. SIDEBAR: INPUT BOBOT USER ---
-st.sidebar.header("⚖️ Atur Prioritas Anda")
-st.sidebar.write("Skala 1 (Tidak Penting) sampai 5 (Sangat Penting)")
 
-w1 = st.sidebar.slider("Harga (C1)", 1, 5, 5) # Default 5 [cite: 18]
-w2 = st.sidebar.slider("Brand (C2)", 1, 5, 4) # Default 4 [cite: 19]
-w3 = st.sidebar.slider("Komposisi (C3)", 1, 5, 3) # Default 3 [cite: 20]
-w4 = st.sidebar.slider("Estetika Botol (C4)", 1, 5, 2) # Default 2 [cite: 21]
-w5 = st.sidebar.slider("Ketersediaan (C5)", 1, 5, 1) # Default 1 [cite: 22]
+# ================== HELPER: BACA EXCEL AUTO HEADER ==================
+def read_excel_auto_header(file_path: Path, sheet_name=0) -> pd.DataFrame:
+    """
+    Membaca Excel yang header-nya tidak di baris pertama.
+    Cari baris yang mengandung 'product_id' lalu jadikan header.
+    Jika tidak ketemu, fallback ke header normal.
+    """
+    raw = pd.read_excel(file_path, header=None, sheet_name=sheet_name)
 
-# Kalkulasi Bobot Relatif (W) [cite: 24, 25]
-total_w = w1 + w2 + w3 + w4 + w5
-weights = np.array([w1/total_w, w2/total_w, w3/total_w, w4/total_w, w5/total_w])
+    header_row = None
+    for i in range(min(50, len(raw))):
+        row = raw.iloc[i].astype(str).str.lower()
+        if row.str.contains("product_id", na=False).any():
+            header_row = i
+            break
 
-# --- 3. PERHITUNGAN TOPSIS ---
+    if header_row is None:
+        df = pd.read_excel(file_path, sheet_name=sheet_name)
+    else:
+        df = raw.iloc[header_row + 1 :].copy()
+        df.columns = raw.iloc[header_row].tolist()
 
-# Ambil hanya kolom kriteria untuk perhitungan
-matrix_x = df_dataset.iloc[:, 2:].values 
+    df = df.dropna(how="all")
+    df = df.loc[:, ~pd.Series(df.columns).astype(str).str.contains("^Unnamed", na=False)]
+    df = df.reset_index(drop=True)
+    return df
 
-# a. Normalisasi (R) [cite: 29]
-divider = np.sqrt(np.sum(matrix_x**2, axis=0))
-matrix_r = matrix_x / divider
 
-# b. Matriks Terbobot (Y) [cite: 38, 39]
-matrix_y = matrix_r * weights
+# ================== LOAD DATASET ==================
+dataset_path = Path(__file__).parent / DATASET_FILENAME
 
-# c. Solusi Ideal Positif (A+) dan Negatif (A-) [cite: 42]
-a_plus = np.max(matrix_y, axis=0)
-a_minus = np.min(matrix_y, axis=0)
+if not dataset_path.exists():
+    st.error(
+        f"File dataset tidak ditemukan: {DATASET_FILENAME}\n\n"
+        "Pastikan file tersebut berada 1 folder dengan app.py (satu repo saat deploy)."
+    )
+    st.stop()
 
-# d. Jarak Solusi (D+ dan D-) [cite: 46, 47]
-d_plus = np.sqrt(np.sum((matrix_y - a_plus)**2, axis=1))
-d_minus = np.sqrt(np.sum((matrix_y - a_minus)**2, axis=1))
+df = read_excel_auto_header(dataset_path)
 
-# e. Nilai Preferensi (V) [cite: 53]
-v_score = d_minus / (d_minus + d_plus)
+if df.empty:
+    st.error("Dataset terbaca kosong.")
+    st.stop()
 
-# --- 4. TAMPILAN HASIL ---
-df_dataset['Skor Kedekatan (V)'] = v_score
-hasil_ranking = df_dataset[['Kode', 'Nama Produk', 'Skor Kedekatan (V)']].sort_values(by='Skor Kedekatan (V)', ascending=False)
+st.subheader("Preview Dataset (Bawaan)")
+st.dataframe(df.head(10), use_container_width=True)
 
-# Menentukan Rekomendasi Utama
-rekomendasi_utama = hasil_ranking.iloc[0]['Nama Produk']
+# ================== PILIH ALTERNATIF (NAMA PRODUK) ==================
+st.markdown("## Pengaturan Alternatif & Kriteria")
 
-st.success(f"### 🏆 Rekomendasi Terbaik: **{rekomendasi_utama}**")
+name_col = st.selectbox(
+    "Pilih kolom nama produk (Alternatif):",
+    options=df.columns.tolist(),
+    index=df.columns.tolist().index("product_name") if "product_name" in df.columns else 0,
+)
 
-col1, col2 = st.columns([2, 1])
+# ================== PILIH KRITERIA (KOLUM NUMERIK) ==================
+numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
+numeric_cols = [c for c in numeric_cols if str(c).lower() not in ["product_id"]]
 
-with col1:
-    st.subheader("Tabel Ranking")
-    # Menampilkan tabel dengan gaya highlight untuk ranking 1
-    st.dataframe(hasil_ranking.style.highlight_max(subset=['Skor Kedekatan (V)'], color='#2E7D32'))
+if len(numeric_cols) < 2:
+    st.error("Dataset harus punya minimal 2 kolom numerik untuk TOPSIS.")
+    st.stop()
 
-with col2:
-    st.subheader("Visualisasi Skor")
-    st.bar_chart(hasil_ranking.set_index('Nama Produk')['Skor Kedekatan (V)'])
+criteria_cols = st.multiselect(
+    "Pilih kolom kriteria (Numerik) untuk TOPSIS:",
+    options=numeric_cols,
+    default=[c for c in ["price_idr", "alcohol_content_percent", "volume_ml", "sugar_content_g"] if c in numeric_cols]
+    or numeric_cols[:3],
+)
 
-with st.expander("Lihat Dataset Acuan (Tetap)"):
-    st.write("Data ini digunakan sebagai dasar perhitungan dan tidak dapat diubah.")
-    st.table(df_dataset.iloc[:, :7])
+if len(criteria_cols) < 2:
+    st.warning("Pilih minimal 2 kriteria.")
+    st.stop()
+
+# ================== PILIH ALTERNATIF YANG DIBANDINGKAN ==================
+opts = df[name_col].astype(str).tolist()
+
+chosen = st.multiselect(
+    "Pilih alternatif yang ingin dibandingkan:",
+    options=opts,
+    default=opts[:10]  # default ambil 10 pertama biar user langsung lihat hasil
+)
+
+if len(chosen) < 2:
+    st.warning("Pilih minimal 2 alternatif.")
+    st.stop()
+
+data_df = df[df[name_col].astype(str).isin(chosen)][[name_col] + criteria_cols].copy()
+data_df = data_df.rename(columns={name_col: "Alternatif"})
+
+st.subheader("Matriks Keputusan (Data Asli dari Dataset)")
+st.dataframe(data_df, use_container_width=True)
+
+# ================== BOBOT & TIPE KRITERIA ==================
+st.sidebar.header("Bobot & Tipe Kriteria")
+
+weights_raw = {}
+types = {}
+
+for c in criteria_cols:
+    weights_raw[c] = st.sidebar.slider(f"Bobot {c}", 1, 5, 3)
+
+    # default otomatis (bisa kamu sesuaikan)
+    default_type = "Benefit"
+    if str(c).lower() in ["price_idr", "sugar_content_g", "harga", "price"]:
+        default_type = "Cost"
+
+    types[c] = st.sidebar.selectbox(
+        f"Tipe {c}",
+        ["Benefit", "Cost"],
+        index=0 if default_type == "Benefit" else 1,
+    )
+
+weights = normalize_weights(weights_raw)
+
+st.sidebar.markdown("---")
+st.sidebar.caption("Catatan: Cost = semakin kecil semakin baik, Benefit = semakin besar semakin baik.")
+
+st.subheader("Bobot (Normalisasi)")
+w_df = pd.DataFrame({
+    "Kriteria": list(weights.keys()),
+    "Bobot (raw)": [weights_raw[k] for k in weights.keys()],
+    "Bobot (normalisasi)": [weights[k] for k in weights.keys()],
+})
+st.dataframe(w_df, use_container_width=True)
+
+# ================== HITUNG TOPSIS ==================
+matrix_numeric = data_df.copy()
+for c in criteria_cols:
+    matrix_numeric[c] = pd.to_numeric(matrix_numeric[c], errors="raise")
+
+X = matrix_numeric[criteria_cols].to_numpy(float)
+w = np.array([weights[c] for c in criteria_cols], dtype=float)
+is_benefit = np.array([types[c] == "Benefit" for c in criteria_cols], dtype=bool)
+
+result = topsis_rank(X, w, is_benefit)
+
+out = pd.DataFrame({
+    "Alternatif": matrix_numeric["Alternatif"].astype(str),
+    "D_plus": result["D_plus"],
+    "D_minus": result["D_minus"],
+    "V": result["V"],
+})
+out["Ranking"] = out["V"].rank(ascending=False, method="min").astype(int)
+out = out.sort_values(["Ranking", "Alternatif"]).reset_index(drop=True)
+
+st.subheader("Hasil TOPSIS")
+st.dataframe(out, use_container_width=True)
+
+best = out.iloc[0]
+st.success(f"Rekomendasi terbaik: **{best['Alternatif']}** (V = {best['V']:.4f})")
