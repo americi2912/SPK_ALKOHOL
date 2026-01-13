@@ -14,10 +14,12 @@ st.caption(
 
 DATASET_FILENAME = "Dataset Alkohol.xlsx"
 
+# ================== ALTERNATIF PATEN ==================
+FIXED_ALTERNATIVES = ["Wine Merah", "Vodka", "Baileys", "Tequila", "Aperol"]
+
 
 # ------------------ BACA EXCEL (HEADER DI BARIS product_id) ------------------
 def read_dataset(file_path: Path) -> pd.DataFrame:
-    # pakai engine openpyxl biar jelas di Cloud
     raw = pd.read_excel(file_path, header=None, engine="openpyxl")
 
     header_row = None
@@ -126,7 +128,6 @@ except NameError:
 
 dataset_path = base_dir / DATASET_FILENAME
 
-# fallback: kalau nama beda atau path beda, ambil xlsx pertama di root repo
 if not dataset_path.exists():
     xlsx_files = list(base_dir.glob("*.xlsx"))
     if xlsx_files:
@@ -139,7 +140,6 @@ if not dataset_path.exists():
     )
     st.stop()
 
-# tampilkan path yang dipakai biar gampang debug di Cloud
 st.sidebar.caption(f"Dataset dipakai: {dataset_path.name}")
 
 df = read_dataset(dataset_path)
@@ -164,17 +164,26 @@ with st.expander("Lihat aturan pembentukan skor (Brand/Komposisi/Estetika/Keters
 """
     )
 
-# ================== PILIH ALTERNATIF ==================
-st.markdown("## Pilih Alternatif yang Dibandingkan")
+# ================== ALTERNATIF PATEN (TAMPIL LIST) ==================
+st.markdown("## Alternatif yang Dibandingkan (Tetap)")
+st.markdown(
+    """
+- Wine Merah  
+- Vodka  
+- Baileys  
+- Tequila  
+- Aperol  
+"""
+)
 
-all_alts = spk_df["Alternatif"].tolist()
-chosen = st.multiselect("Pilih alternatif:", options=all_alts, default=all_alts[:10])
+# Filter hanya alternatif paten
+data_df = spk_df[spk_df["Alternatif"].isin(FIXED_ALTERNATIVES)].reset_index(drop=True)
 
-if len(chosen) < 2:
-    st.warning("Pilih minimal 2 alternatif.")
+# Validasi: pastikan semua alternatif ada di dataset
+missing = [a for a in FIXED_ALTERNATIVES if a not in set(data_df["Alternatif"])]
+if missing:
+    st.error(f"Alternatif berikut tidak ditemukan di dataset: {missing}")
     st.stop()
-
-data_df = spk_df[spk_df["Alternatif"].isin(chosen)].reset_index(drop=True)
 
 st.subheader("Data yang Digunakan untuk TOPSIS")
 st.dataframe(data_df, use_container_width=True)
