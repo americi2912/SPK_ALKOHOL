@@ -166,6 +166,7 @@ with st.expander("Lihat aturan pembentukan skor (Brand/Komposisi/Estetika/Keters
 
 # ================== ALTERNATIF PATEN (TAMPIL LIST) ==================
 st.markdown("## Alternatif yang Dibandingkan (Tetap)")
+
 st.markdown(
     """
 - Wine Merah  
@@ -176,13 +177,12 @@ st.markdown(
 """
 )
 
-# Filter hanya alternatif paten
 data_df = spk_df[spk_df["Alternatif"].isin(FIXED_ALTERNATIVES)].reset_index(drop=True)
 
-# Validasi: pastikan semua alternatif ada di dataset
-missing = [a for a in FIXED_ALTERNATIVES if a not in set(data_df["Alternatif"])]
-if missing:
-    st.error(f"Alternatif berikut tidak ditemukan di dataset: {missing}")
+# validasi keamanan
+if len(data_df) != len(FIXED_ALTERNATIVES):
+    missing = set(FIXED_ALTERNATIVES) - set(data_df["Alternatif"])
+    st.error(f"Alternatif berikut tidak ditemukan di dataset: {list(missing)}")
     st.stop()
 
 st.subheader("Data yang Digunakan untuk TOPSIS")
