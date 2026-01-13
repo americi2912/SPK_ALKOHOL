@@ -7,14 +7,18 @@ from topsis import topsis_rank, normalize_weights
 
 st.set_page_config(page_title="SPK Alkohol - TOPSIS", layout="wide")
 st.title("Sistem Pendukung Keputusan Alkohol (TOPSIS)")
-st.caption("Rekomendasi otomatis dari dataset bawaan menggunakan 5 kriteria: Harga, Brand, Komposisi, Estetika Botol, Ketersediaan.")
+st.caption(
+    "Rekomendasi otomatis dari dataset bawaan menggunakan 5 kriteria: "
+    "Harga, Brand, Komposisi, Estetika Botol, Ketersediaan."
+)
 
 DATASET_FILENAME = "Dataset Alkohol.xlsx"
 
 
 # ------------------ BACA EXCEL (HEADER DI BARIS product_id) ------------------
 def read_dataset(file_path: Path) -> pd.DataFrame:
-    raw = pd.read_excel(file_path, header=None)
+    # pakai engine openpyxl biar jelas di Cloud
+    raw = pd.read_excel(file_path, header=None, engine="openpyxl")
 
     header_row = None
     for i in range(min(80, len(raw))):
@@ -24,7 +28,7 @@ def read_dataset(file_path: Path) -> pd.DataFrame:
             break
 
     if header_row is None:
-        df = pd.read_excel(file_path)
+        df = pd.read_excel(file_path, engine="openpyxl")
     else:
         df = raw.iloc[header_row + 1 :].copy()
         df.columns = raw.iloc[header_row].tolist()
@@ -47,38 +51,18 @@ def read_dataset(file_path: Path) -> pd.DataFrame:
 
 # ------------------ KONVERSI TEKS -> SKOR 1–5 (SESUAI 5 KRITERIA AWAL) ------------------
 def score_brand(row) -> int:
-    """
-    Proxy BRAND (1–5) dari kombinasi:
-    - origin_country: impor cenderung lebih tinggi dari lokal
-    - category: Spirit/Wine cenderung 'brand image' lebih tinggi daripada Beer/RTD
-    """
     origin = str(row.get("origin_country", "")).strip().lower()
     category = str(row.get("category", "")).strip().lower()
 
-    # skor kategori (brand image)
-    cat_score_map = {
-        "spirit": 5,
-        "wine": 5,
-        "sake": 4,
-        "cider": 3,
-        "rtd": 3,
-        "beer": 2,
-    }
+    cat_score_map = {"spirit": 5, "wine": 5, "sake": 4, "cider": 3, "rtd": 3, "beer": 2}
     cat_score = cat_score_map.get(category, 3)
 
-    # skor asal negara (impor vs lokal)
-    # Indonesia = 3 (netral), selain Indonesia = 4 (impor)
     origin_score = 3 if origin == "indonesia" else 4
-
     score = round((cat_score + origin_score) / 2)
     return int(max(1, min(5, score)))
 
 
 def score_komposisi(row) -> int:
-    """
-    Proxy KOMPOSISI (1–5) dari kompleksitas main_ingredients:
-    - hitung jumlah bahan (dipisah koma)
-    """
     ing = str(row.get("main_ingredients", "")).strip()
     if ing.lower() in ["", "nan"]:
         return 1
@@ -97,9 +81,6 @@ def score_komposisi(row) -> int:
 
 
 def score_estetika(row) -> int:
-    """
-    Proxy ESTETIKA BOTOL (1–5) dari packaging.
-    """
     pack = str(row.get("packaging", "")).strip().lower()
     if pack == "bottle":
         return 5
@@ -107,26 +88,14 @@ def score_estetika(row) -> int:
         return 3
     if pack in ["glass", "jar"]:
         return 4
-    return 4  # default netral
+    return 4
 
 
 def score_ketersediaan(row) -> int:
-    """
-    Proxy KETERSEDIAAN (1–5) berdasarkan:
-    - kategori yang umumnya lebih mudah ditemukan (Beer/RTD lebih mudah)
-    - bonus jika origin Indonesia (lebih mudah tersedia)
-    """
     origin = str(row.get("origin_country", "")).strip().lower()
     category = str(row.get("category", "")).strip().lower()
 
-    cat_avail_map = {
-        "beer": 5,
-        "rtd": 5,
-        "cider": 4,
-        "spirit": 3,
-        "wine": 2,
-        "sake": 2,
-    }
+    cat_avail_map = {"beer": 5, "rtd": 5, "cider": 4, "spirit": 3, "wine": 2, "sake": 2}
     base = cat_avail_map.get(category, 3)
 
     if origin == "indonesia":
@@ -136,21 +105,10 @@ def score_ketersediaan(row) -> int:
 
 
 def build_spk_matrix(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Bentuk matriks keputusan 5 kriteria sesuai aturan awal:
-    - Harga: pakai price_idr (akan diperlakukan COST)
-    - Brand: skor 1–5 (proxy)
-    - Komposisi: skor 1–5 (proxy)
-    - Estetika Botol: skor 1–5 (proxy)
-    - Ketersediaan: skor 1–5 (proxy)
-    """
     out = pd.DataFrame()
     out["Alternatif"] = df["product_name"].astype(str)
 
-    # Harga: gunakan price_idr asli (COST)
     out["Harga"] = pd.to_numeric(df["price_idr"], errors="coerce")
-
-    # Skor 1–5 dari kolom teks
     out["Brand"] = df.apply(score_brand, axis=1)
     out["Komposisi"] = df.apply(score_komposisi, axis=1)
     out["Estetika Botol"] = df.apply(score_estetika, axis=1)
@@ -160,11 +118,29 @@ def build_spk_matrix(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# ================== LOAD DATASET ==================
-dataset_path = Path(__file__).parent / DATASET_FILENAME
+# ================== LOAD DATASET (DEPLOY SAFE) ==================
+try:
+    base_dir = Path(__file__).parent
+except NameError:
+    base_dir = Path.cwd()
+
+dataset_path = base_dir / DATASET_FILENAME
+
+# fallback: kalau nama beda atau path beda, ambil xlsx pertama di root repo
 if not dataset_path.exists():
-    st.error(f"File dataset tidak ditemukan: {DATASET_FILENAME}. Pastikan file ada 1 folder dengan app.py.")
+    xlsx_files = list(base_dir.glob("*.xlsx"))
+    if xlsx_files:
+        dataset_path = xlsx_files[0]
+
+if not dataset_path.exists():
+    st.error(
+        "Dataset Excel tidak ditemukan di repo.\n\n"
+        "Pastikan file Excel ada di root repo (sefolder app.py), contoh: Dataset Alkohol.xlsx"
+    )
     st.stop()
+
+# tampilkan path yang dipakai biar gampang debug di Cloud
+st.sidebar.caption(f"Dataset dipakai: {dataset_path.name}")
 
 df = read_dataset(dataset_path)
 
@@ -180,23 +156,19 @@ st.dataframe(spk_df.head(20), use_container_width=True)
 with st.expander("Lihat aturan pembentukan skor (Brand/Komposisi/Estetika/Ketersediaan)", expanded=False):
     st.markdown(
         """
-**Harga (Cost)**: menggunakan `price_idr` langsung.  
-**Brand (Benefit)**: rata-rata skor dari *category* (Spirit/Wine lebih tinggi) dan *origin_country* (impor sedikit lebih tinggi dari lokal).  
-**Komposisi (Benefit)**: jumlah bahan pada `main_ingredients` (semakin banyak bahan, skor semakin tinggi).  
+**Harga (Cost)**: menggunakan `price_idr`.  
+**Brand (Benefit)**: skor dari *category* dan *origin_country*.  
+**Komposisi (Benefit)**: jumlah bahan pada `main_ingredients`.  
 **Estetika Botol (Benefit)**: `packaging` Bottle=5, Can=3, lainnya=4.  
-**Ketersediaan (Benefit)**: Beer/RTD lebih mudah (skor tinggi), Wine/Sake lebih rendah; bonus jika origin Indonesia.
+**Ketersediaan (Benefit)**: Beer/RTD lebih tinggi; bonus jika origin Indonesia.
 """
     )
 
-# ================== PILIH ALTERNATIF YANG DIBANDINGKAN ==================
+# ================== PILIH ALTERNATIF ==================
 st.markdown("## Pilih Alternatif yang Dibandingkan")
 
 all_alts = spk_df["Alternatif"].tolist()
-chosen = st.multiselect(
-    "Pilih alternatif:",
-    options=all_alts,
-    default=all_alts[:10]
-)
+chosen = st.multiselect("Pilih alternatif:", options=all_alts, default=all_alts[:10])
 
 if len(chosen) < 2:
     st.warning("Pilih minimal 2 alternatif.")
@@ -207,10 +179,9 @@ data_df = spk_df[spk_df["Alternatif"].isin(chosen)].reset_index(drop=True)
 st.subheader("Data yang Digunakan untuk TOPSIS")
 st.dataframe(data_df, use_container_width=True)
 
-# ================== BOBOT & TIPE KRITERIA (SESUIAI ATURAN AWAL) ==================
+# ================== BOBOT & TIPE ==================
 st.sidebar.header("Bobot & Tipe Kriteria")
 
-# default bobot sesuai pola awal (5,4,3,2,1)
 weights_raw = {
     "Harga": st.sidebar.slider("Bobot Harga", 1, 5, 5),
     "Brand": st.sidebar.slider("Bobot Brand", 1, 5, 4),
@@ -219,7 +190,6 @@ weights_raw = {
     "Ketersediaan": st.sidebar.slider("Bobot Ketersediaan", 1, 5, 1),
 }
 
-# tipe sesuai aturan: Harga COST, lainnya BENEFIT
 types = {
     "Harga": "Cost",
     "Brand": "Benefit",
